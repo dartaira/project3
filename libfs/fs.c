@@ -194,9 +194,15 @@ int fs_info(void) {
   printf("data_blk=%d\n", sb.dataBlockIndex);
   printf("data_blk_count=%d\n", sb.numDataBlocks);
 
+  uint16_t DATABlocks = sb.numDataBlocks;
+  uint16_t FATblocksize = 2048;
+  if(DATABlocks<BLOCK_SIZE){
+    FATblocksize = sb.numDataBlocks;
+  }
+
   int freeFAT = 0;
   for (int i = 0; i < sb.numFATBlocks; i++) {
-    for (int j = 0; j < 2048; j++) { 
+    for (int j = 0; j < FATblocksize; j++) { 
       if(i==0 && j==0){
         continue;
       //  printf("FATarray at entry 0 is always EOC\n");
@@ -555,7 +561,9 @@ int fs_write(int fd, void *buf, size_t count) {
   // printFAT();
   // printOpenFiles();
   // printRoot();
-  
+   if(count==0){
+    return 0;
+  }
   if (buf == NULL) {
     return -1;
   }
@@ -602,9 +610,7 @@ int fs_write(int fd, void *buf, size_t count) {
   if(found2==-1){
     return -1;
   }
-  if(count==0){
-    return 0;
-  }
+ 
 
   //function that finds the end block index of the file
   size_t bytesWrite=0;
@@ -674,6 +680,9 @@ int fs_read(int fd, void *buf, size_t count) {
   //find file in open files
   if (buf == NULL) {
     return -1;
+  }
+  if(count==0){
+    return 0;
   }
   //check if the file is open
   int found=-1;
