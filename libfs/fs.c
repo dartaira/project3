@@ -198,17 +198,18 @@ int fs_info(void) {
   for (int i = 0; i < sb.numFATBlocks; i++) {
     for (int j = 0; j < 2048; j++) { 
       if(i==0 && j==0){
-        printf("FATarray at entry 0 is always EOC\n");
+        continue;
+      //  printf("FATarray at entry 0 is always EOC\n");
       }
       else if (FATarray[i].entries[j] == 0) {
         freeFAT++;
       }
-      else if(FATarray[i].entries[j] == FAT_EOC){
-        printf("FATarray at entry %d is end of file (or has smaller things in it)\n",(i*2048)+j);
-      }
-      else{
-        printf("Stuff in datablockindex %d! next block that has this files data is %d\n",(i*2048)+j,FATarray[i].entries[j]);
-      }
+      // else if(FATarray[i].entries[j] == FAT_EOC){
+      //   printf("FATarray at entry %d is end of file (or has smaller things in it)\n",(i*2048)+j);
+      // }
+      // else{
+      //   printf("Stuff in datablockindex %d! next block that has this files data is %d\n",(i*2048)+j,FATarray[i].entries[j]);
+      // }
     }
   }
   int freeRoot = 0;
@@ -216,9 +217,9 @@ int fs_info(void) {
     if (rd[k].fileName[0] == '\0') {
       freeRoot++;
     }
-    else{
-      printf("rd[%d] is file '%s' and starts at datablockindex(fatblockindex) %d\n", k,rd[k].fileName, rd[k].firstBlockIndex);
-    }
+    // else{
+    //   printf("rd[%d] is file '%s' and starts at datablockindex(fatblockindex) %d\n", k,rd[k].fileName, rd[k].firstBlockIndex);
+    // }
   }
   printf("fat_free_ratio=%d/%d\n", freeFAT, sb.numDataBlocks);
   printf("rdir_free_ratio=%d/%d\n", freeRoot, 128);
