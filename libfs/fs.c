@@ -11,7 +11,6 @@
 #include "disk.h"
 #include "fs.h"
 
-
 #define FAT_EOC 0xFFFF
 #define Root_Dir_Entries 128
 
@@ -130,11 +129,16 @@ void clearRoot(){
 
 
 int fs_mount(const char *diskname) {
- // printf("mount is called\n");
   if (block_disk_open(diskname) == -1) {
     return -1;
   }
   if (block_read(0, &sb) == -1) {
+    return -1;
+  }
+  if(strncmp(sb.signature, "ECS150FS",8)!=0){
+    return -1;
+  }
+  if(block_disk_count()!=sb.numTotalBlocks){
     return -1;
   }
   FATarray = (struct FAT *)malloc(sizeof(struct FAT) * sb.numFATBlocks);
@@ -146,18 +150,17 @@ int fs_mount(const char *diskname) {
   if (block_read(sb.rootDirIndex, &rd) == -1) {
     return -1;
   }
-
   //does it keep the open file fd when you unmount it and mount it again?
   for(int openFileIterator=0;openFileIterator<FS_OPEN_MAX_COUNT;openFileIterator++){
     openFiles[openFileIterator].fd=-1;
     openFiles[openFileIterator].offset=0;
+    strcpy(openFiles[openFileIterator].fileName,"\0");
   }
   return 0;
   /* TODO: Phase 1 */
 }
 
 int fs_umount(void) {
- // printf("unmount is called\n");
   if (block_write(0, &sb) == -1) {
     return -1;
   }
@@ -172,20 +175,17 @@ int fs_umount(void) {
   if (block_disk_close() == -1) {
     return -1;
   }
-  // for(int openFileIterator=0;openFileIterator<FS_OPEN_MAX_COUNT;openFileIterator++){
-  //   close(openFiles[openFileIterator].fd);
-  //   openFiles[openFileIterator].fd=-1;
-  //   openFiles[openFileIterator].offset=0;
-  // }
-
+  for(int openFileIterator=0;openFileIterator<FS_OPEN_MAX_COUNT;openFileIterator++){
+     openFiles[openFileIterator].fd=-1;
+    openFiles[openFileIterator].offset=0;
+    strcpy(openFiles[openFileIterator].fileName,"\0");
+    close(openFiles[openFileIterator].fd);
+  }
   return 0;
   /* TODO: Phase 1 */
 }
 
 int fs_info(void) {
-  // printFAT();
-  // printOpenFiles();
-  // printRoot();
   // Printing info into terminal
   printf("FS Info:\n");
   printf("total_blk_count=%d\n", sb.numTotalBlocks);
@@ -194,58 +194,58 @@ int fs_info(void) {
   printf("data_blk=%d\n", sb.dataBlockIndex);
   printf("data_blk_count=%d\n", sb.numDataBlocks);
 
-  uint16_t DATABlocks = sb.numDataBlocks;
-  uint16_t FATblocksize = 2048;
-  if(DATABlocks<BLOCK_SIZE){
-    FATblocksize = sb.numDataBlocks;
-  }
 
+  // calculate the number of full FAT blocks as well as the extra fat blocks
+  uint16_t fullFatBlocks = sb.numDataBlocks/2048;
+  uint16_t extraFatEntries = sb.numDataBlocks - (fullFatBlocks*2048);
+
+  //iterate through all the "full" FAT blocks
   int freeFAT = 0;
-  for (int i = 0; i < sb.numFATBlocks; i++) {
-    for (int j = 0; j < FATblocksize; j++) { 
+  for (int i = 0; i < fullFatBlocks; i++) {
+    for (int j = 0; j < 2048; j++) { 
       if(i==0 && j==0){
         continue;
-      //  printf("FATarray at entry 0 is always EOC\n");
       }
       else if (FATarray[i].entries[j] == 0) {
         freeFAT++;
       }
-      // else if(FATarray[i].entries[j] == FAT_EOC){
-      //   printf("FATarray at entry %d is end of file (or has smaller things in it)\n",(i*2048)+j);
-      // }
-      // else{
-      //   printf("Stuff in datablockindex %d! next block that has this files data is %d\n",(i*2048)+j,FATarray[i].entries[j]);
-      // }
     }
   }
+  //iterate through all the "extra" FAT entries
+  for(int free=0; free< extraFatEntries; free++){
+    if(fullFatBlocks==0 && free==0){
+      continue;
+      }
+      if(FATarray[fullFatBlocks].entries[free]==0){
+        freeFAT++;
+        }
+    }
+
+  //iterate through all the file entries
   int freeRoot = 0;
   for (int k = 0; k < FS_FILE_MAX_COUNT; k++) {
     if (rd[k].fileName[0] == '\0') {
       freeRoot++;
     }
-    // else{
-    //   printf("rd[%d] is file '%s' and starts at datablockindex(fatblockindex) %d\n", k,rd[k].fileName, rd[k].firstBlockIndex);
-    // }
   }
   printf("fat_free_ratio=%d/%d\n", freeFAT, sb.numDataBlocks);
   printf("rdir_free_ratio=%d/%d\n", freeRoot, 128);
   /* TODO: Phase 1 */
   return 0;
-  /* TODO: Phase 1 */
 }
 
 int fs_create(const char *filename) {
- // printf("called create\n");
-
+  //check invalid file
   if (filename == NULL || strlen(filename) >= FS_FILENAME_LEN) {
-  //  printf("broke\n");
     return -1;
   }
+  //check if the filename is null terminated
   if (strchr(filename, '\0') == NULL) {
-   //    printf("broke\n");
         return -1;
     }
+
   int find =0;
+  // if file is already in the root directory
   for (find = 0; find < FS_FILE_MAX_COUNT; find++) {
     if (strcmp(filename, rd[find].fileName) == 0) {
   //    printf("file is already here\n");
@@ -253,14 +253,14 @@ int fs_create(const char *filename) {
     }
   }
 
+  //finds an empty spot in the root directory
   int emptySpot = -1;
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-    if (rd[i].fileName[0]=='\0') { // rootDirBlock[i].fileName[0]=='\0'
+    if (rd[i].fileName[0]=='\0') {
       emptySpot = i;
       break;
     }
   }
-
   // Check if the directory is full
   if (emptySpot == -1) {
     return -1;
@@ -270,21 +270,14 @@ int fs_create(const char *filename) {
   strcpy(rd[emptySpot].fileName, filename);
   rd[emptySpot].fileSize = 0;
   rd[emptySpot].firstBlockIndex = FAT_EOC;
- 
- // printRoot();
   return 0;
 }
 
 int fs_delete(const char *filename) {
- // printf("delete is called\n");
-  // printOpenFiles();
-  // printFAT();
-  // printRoot();
-  // Look for file
+  // Look for file in the root directory 
   int fileIndex = -1;
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
-    if (strcmp(rd[i].fileName, filename) ==
-        0) { // rootDirBlock[i].fileName[0]=='\0'
+    if (strcmp(rd[i].fileName, filename) == 0) { 
       fileIndex = i;
       break;
     }
@@ -295,69 +288,60 @@ int fs_delete(const char *filename) {
   }
   
   //check is the files is opened
-  // for(int opened=0;opened<FS_OPEN_MAX_COUNT;opened++){
-  //   if(strcmp(openFiles[opened].fileName, filename)){
-  //     return -1;
-  //   }
-  // }
+  for(int opened=0;opened<FS_OPEN_MAX_COUNT;opened++){
+    if(strcmp(openFiles[opened].fileName, filename)==0){
+      return -1;
+    }
+  }
 
   //reset file-chain in fat 
   int block_in_fat = rd[fileIndex].firstBlockIndex/2048;
   int entry_no = rd[fileIndex].firstBlockIndex%2048;
   while(FATarray[block_in_fat].entries[entry_no]!=FAT_EOC){
-    if(FATarray[block_in_fat].entries[entry_no]==0){
- //     printf("this entry is free but it suppose to have a file occupy it\n");
-      return -1;
-    }
-    else{
+      //find the next FAT entry to go to 
       int next_block_in_fat = FATarray[block_in_fat].entries[entry_no]/2048;
       int next_entry_no = FATarray[block_in_fat].entries[entry_no]%2048;
+      //make the current entry "free"
       FATarray[block_in_fat].entries[entry_no] = 0;
       block_in_fat = next_block_in_fat;
       entry_no = next_entry_no;
-    }
   }
+  //make the last entry in the link "free"
   FATarray[block_in_fat].entries[entry_no]=0;
 
-  // reset rootDirBlock[em]
+  //take out the file in the root directory
   strcpy(rd[fileIndex].fileName, "\0");
   rd[fileIndex].fileSize = 0;
   rd[fileIndex].firstBlockIndex = FAT_EOC;
-  // printFAT();
-  // printRoot();
-  // printOpenFiles();
-
-
-  
-  
-  //this is temporary
-
-  /* TODO: Phase 2 */
   return 0;
 }
 
 int fs_ls(void) {
   printf("FS Ls:\n");
+  //iterate through all the files in the root directory
   for (int currentFile = 0; currentFile < Root_Dir_Entries; currentFile++) {
     if (rd[currentFile].fileName[0] == '\0') {
       break;
     } else {
+      //print metadata
       printf("file: %s, size: %d, data_blk: %d\n", rd[currentFile].fileName,
              rd[currentFile].fileSize, rd[currentFile].firstBlockIndex);
     }
   }
-  /* TODO: Phase 2 */
   return 0;
 }
 
 int fs_open(const char *filename) {  
- //  printf("open is called\n");
-  /* TODO: Phase 3 */
   // First check if the file is mounted
-  // Check if the file is NULL
+
+  // Check if the file is NULL or invalid
   if (filename == NULL || strlen(filename)>FS_FILENAME_LEN) {
     return -1;
   }
+  //check if the filename is null terminated
+  if (strchr(filename, '\0') == NULL) {
+    return -1;
+    }
   int found=-1;
   //checks if the filename is in the root directory
   for(int checkrd=0;checkrd<FS_FILE_MAX_COUNT;checkrd++){
@@ -368,100 +352,69 @@ int fs_open(const char *filename) {
   }
   //return -1 if the filename is not in the root directory
   if(found==-1){
- //   printf("broke\n");
     return -1;
   }
+  //opens the filename
   int fd = open(filename, O_RDWR | O_CREAT, 0644);
   if(fd<0){
- //   printf("broke2\n");
     return -1;
   }
-
   //checks if the file is already opened or if there's a space to open it
   for(int openFileIndex=0;openFileIndex<FS_OPEN_MAX_COUNT;openFileIndex++){
-    //checks if it is already opened, might need to get rid of
+    //replace the current fd
     if(strcmp(openFiles[openFileIndex].fileName, filename)==0){
-  //    printf("file is opened. switching fd\n");
       dup2(openFiles[openFileIndex].fd, fd);
       openFiles[openFileIndex].fd=fd;
       return fd;
     }
     //checks if an entry is empty, and we can occupy (open) the file
     else if(openFiles[openFileIndex].fd==-1){
-      //occupies the open file entry with the fd, offset, and filename
+      dup2(openFiles[openFileIndex].fd, fd);
       openFiles[openFileIndex].fd = fd;
       openFiles[openFileIndex].offset=0;
       strcpy(openFiles[openFileIndex].fileName,filename);
-
+      //error check
       if(openFiles[openFileIndex].fd<0){
- //       printf("problem openening the file\n");
         return -1;
       }
-  //    printf("found empty space\n");
-      dup2(openFiles[openFileIndex].fd, fd);
-      openFiles[openFileIndex].fd=fd;
-  //    printf("new fd: %d for :%s\n", openFiles[openFileIndex].fd, openFiles[openFileIndex].fileName);
       return fd;
     }
   }
-
   //if no spaces are open in the array
-//  printf("no spaces left\n");
   return -1;
 }
 
 int fs_close(int fd) {
- // printf("closed is called\n");
   int fdFind = 0;
-  int found = 0;
+  int found = -1;
   //checks if the file is opened
   for (fdFind = 0; fdFind < FS_FILE_MAX_COUNT; fdFind++) {
     if (openFiles[fdFind].fd == fd) {
-      found = 1;
+      found=1;
       break;
     }
   }
   //if the file is not even opened
-  if (found != 1) {
+  if (found==-1) {
     return -1;
   }
-  //find this file in the directory, get the startingdatablockindex, which is the same as fatIndex where the file starts
-  // int rdFind=0;
-  // for(rdFind=0;rdFind<Root_Dir_Entries;rdFind++){
-  //   if( strcmp(rd[rdFind].fileName,openFiles.Files[fdFind].fileName)){
-  //     break;
-  //   }
-  // }
-
-  // uint16_t firstDataBlockIndex= rd[rdFind].firstBlockIndex;
-  // uint16_t FATEntryBlock = firstDataBlockIndex/2048;
-  // uint16_t FATEntry = firstDataBlockIndex%2048;
-
-  // //clear space in the fat
-  // while(FATarray[FATEntryBlock].entries[FATEntry]!=FAT_EOC){
-
-  // }
-
-  //closes the file and restores the entry in openFiles so that another file can be opened 
-  
-  close(openFiles[fdFind].fd);
+  //empties the entry in the openFiles array
   openFiles[fdFind].fd = -1;
   openFiles[fdFind].offset = 0;
   strcpy(openFiles[fdFind].fileName, "\0");
-  /* TODO: Phase 3 */
+  //closes file
+  close(openFiles[fdFind].fd);
   return 0;
 }
 
 int fs_stat(int fd) {
-  //printf("stat called\n");
   char nameOfFile[FS_FILENAME_LEN];
   int openIndex = 0;
   int found = 0;
- // struct stat fileStat;
+  //iterates through the openfiles
   for (openIndex = 0; openIndex < FS_OPEN_MAX_COUNT; openIndex++) {
     if (openFiles[openIndex].fd == fd) {
       strcpy(nameOfFile, openFiles[openIndex].fileName);
-    //  printf("file name to stat: %s\n",nameOfFile);
       found = 1;
       break;
     }
@@ -470,33 +423,31 @@ int fs_stat(int fd) {
   if (found == 0) {
     return -1;
   }
+  //iterates through the root directory
   for(int i=0;i<Root_Dir_Entries;i++){
     if(strcmp(rd[i].fileName, nameOfFile)==0){
-    //  printf("file size: %d\n", rd[i].fileSize);
       return rd[i].fileSize;
     }
   }
   return -1;
-  //stat(nameOfFile, &fileStat);
-  //return fileStat.st_size;
-  /* TODO: Phase 3 */
 }
 
 int fs_lseek(int fd, size_t offset) {
   int openIndex = 0;
   int found = 0;
+  //check if file is opened and get the filesize
   for (openIndex = 0; openIndex < FS_OPEN_MAX_COUNT; openIndex++) {
-    //if file is opened
     if (openFiles[openIndex].fd == fd) {
       int fileSize = fs_stat(fd);
       if (fileSize < 0) {
-                return -1; // File not found or another error
-            }
-            // Ensure offset does not exceed file size
-            // Here we assume offset can safely be compared to fileSize
+        return -1; // File not found or another error
+        }
+        // Ensure offset does not exceed file size
+        // Here we assume offset can safely be compared to fileSize
       if (offset > (size_t)fileSize) {
                 return -1;
             }
+      //sets the offset of the file
       openFiles[openIndex].offset = offset;
       found = 1;
       break;
@@ -506,75 +457,112 @@ int fs_lseek(int fd, size_t offset) {
   if (found == 0) {
     return -1;
   }
-  /* TODO: Phase 3 */
   return 0;
 }
 
-//from the firstblock index, it is the same as the entry point to the fat block
+//from the firstblock index, (the same as the entry point to the fat chain)
 uint16_t fs_block_index_from_current_offset(uint16_t startBlock, size_t currFileOffset){
 
   //calculate how many entries to traverse the fat array from the starting block
   uint16_t count = currFileOffset/BLOCK_SIZE;
-  uint16_t returnIndex = startBlock;
+  //keeps track of which block to return
+  uint16_t returnBlock = startBlock;
   
   for(int i=0;i<count;i++){
-    uint16_t nextBlock = returnIndex/2048;
-    uint16_t nextIndex = returnIndex%2048;
-    returnIndex = FATarray[nextBlock].entries[nextIndex];
+    //determine which FatBlock and FatIndex to go to (correspond to a single data block)
+    uint16_t nextBlock = returnBlock/2048;
+    uint16_t nextIndex = returnBlock%2048;
+    returnBlock = FATarray[nextBlock].entries[nextIndex];
   }
-  return returnIndex;
+  return returnBlock;
 }
 
+//adds a fat entry to the end of the FAT chain, return -1 if there's no more fat entries
 int add_FAT_Entry(uint16_t FATBlock, uint16_t FATEntry){
-  for(int i=0;i<sb.numFATBlocks;i++){
+   // calculate the number of full FAT blocks as well as the extra fat entries
+  uint16_t fullFatBlocks = sb.numDataBlocks/2048;
+  uint16_t extraFatEntries = sb.numDataBlocks - (fullFatBlocks*2048);
+  //iterates through entire fatblocks
+  for(int i=0;i<fullFatBlocks;i++){
     for(int j=0;j<2048;j++){
+      //skips the very first entry
       if(j==0 && i==0){
         continue;
       }
+      //checks if the entry is free
       if(FATarray[i].entries[j]==0){
+        //fill the current entry with the "free" entry
         FATarray[FATBlock].entries[FATEntry]= FATarray[i].entries[j];
         FATarray[i].entries[j]=FAT_EOC;
         return 1;
       }
     }
   }
+  // iterates through the extra FAT entries (if any)
+  for(int extra = 0; extra< extraFatEntries; extra++){
+    //skips the very first entry
+    if(fullFatBlocks==0 && extra ==0){
+      continue;
+    }
+     //checks if the entry is free
+    if(FATarray[fullFatBlocks].entries[extra]==0){
+       //fill the current entry with the "free" entry
+       FATarray[FATBlock].entries[FATEntry]= FATarray[fullFatBlocks].entries[extra];
+       FATarray[fullFatBlocks].entries[extra]=FAT_EOC;
+      return 1;
+    }
+  }
   return -1;
 }
 
+//finds an empty FAT entry
 uint16_t find_empty_FAT(){
-   for(int i=0;i<sb.numFATBlocks;i++){
+   // calculate the number of full FAT blocks as well as the extra fat entries
+  uint16_t fullFatBlocks = sb.numDataBlocks/2048;
+  uint16_t extraFatEntries = sb.numDataBlocks - (fullFatBlocks*2048);
+  //iterates through the the entire FAT block
+   for(int i=0;i<fullFatBlocks;i++){
     for(int j=0;j<2048;j++){
+      //skips very first entry
       if(j==0 && i==0){
         continue;
       }
+      //return the DATABLOCK index if the fat entry is free
       if(FATarray[i].entries[j]==0){
         return (i*2048 + j);
       }
+    }
+  }
+  //iterates through any extra entries in the FAT
+  for(int extra =0; extra< extraFatEntries;extra++){
+    //skips very first entry
+      if(fullFatBlocks==0 && extra ==0){
+      continue;
+    }
+    //return the DATABLOCK index if the fat entry is free
+    if(FATarray[fullFatBlocks].entries[extra]==0){
+      return (fullFatBlocks*2048)+ extra;
     }
   }
   return 0;
 }
 
 int fs_write(int fd, void *buf, size_t count) {
- // printf("write called\n");
-  //printf("called write function\n");
-  // printFAT();
-  // printOpenFiles();
-  // printRoot();
    if(count==0){
     return 0;
   }
   if (buf == NULL) {
     return -1;
   }
+
   //check if the file is open
   int found=-1;
   int openIndex =0;
   char fileName[FS_FILENAME_LEN];
+
   for(openIndex=0;openIndex<FS_OPEN_MAX_COUNT;openIndex++){
     if(fd==openFiles[openIndex].fd){
       strcpy(fileName, openFiles[openIndex].fileName);
-   //   printf("file: %s is in openfiles\n", openFiles[openIndex].fileName);
       found=1;
       break;
     }
@@ -582,102 +570,89 @@ int fs_write(int fd, void *buf, size_t count) {
   if(found==-1){
     return -1;
   }
+
   //find file in root directory
   int fileInDirectory=0;
   int found2=-1;
   for( fileInDirectory=0;fileInDirectory<Root_Dir_Entries;fileInDirectory++){
     if(strcmp(rd[fileInDirectory].fileName,fileName)==0){
-   //   printf("file is open at rootdirectory index %d\n", fileInDirectory);
       found2=1;
       break;
     }
   }
-
-    if(rd[fileInDirectory].firstBlockIndex == FAT_EOC){
-      rd[fileInDirectory].firstBlockIndex = find_empty_FAT();
-      if(rd[fileInDirectory].firstBlockIndex==0){
-     //   printf("ran out of space in fat\n");
-        return 0;
-      }
-      uint16_t FATBlock2 = rd[fileInDirectory].firstBlockIndex/2048;
-     uint16_t FATIndex2 = rd[fileInDirectory].firstBlockIndex%2048;
-     FATarray[FATBlock2].entries[FATIndex2]=FAT_EOC;
-    }
-  //   printFAT();
-  // printOpenFiles();
-  // printRoot();
-  //error check 
   if(found2==-1){
     return -1;
   }
- 
-
-  //function that finds the end block index of the file
-  size_t bytesWrite=0;
-  uint8_t bounceBuffer[BLOCK_SIZE];
-
-  while(bytesWrite<count){
+  //if we are writing to an initiall empty file, occupy the firstBlockIndex to write the data
     if(rd[fileInDirectory].firstBlockIndex == FAT_EOC){
       rd[fileInDirectory].firstBlockIndex = find_empty_FAT();
       if(rd[fileInDirectory].firstBlockIndex==0){
-    //    printf("ran out of space in fat\n");
         return 0;
       }
-      uint16_t FATBlock2 = rd[fileInDirectory].firstBlockIndex/2048;
+     uint16_t FATBlock2 = rd[fileInDirectory].firstBlockIndex/2048;
      uint16_t FATIndex2 = rd[fileInDirectory].firstBlockIndex%2048;
      FATarray[FATBlock2].entries[FATIndex2]=FAT_EOC;
     }
+
+
+  //bounce buffer and how many bytes we have currently written
+  size_t bytesWrite=0;
+  uint8_t bounceBuffer[BLOCK_SIZE];
+
+  //while we have written less than our desires amount, write the appropriate amount of bytes 
+  while(bytesWrite<count){
+    //find current data block you are on
      uint16_t currBlock=fs_block_index_from_current_offset(rd[fileInDirectory].firstBlockIndex, openFiles[openIndex].offset);
+
+     //find the corresponding entry in the FATarray
      uint16_t FATBlock = currBlock/2048;
      uint16_t FATIndex = currBlock%2048;
-   
-    // printf("current block: %d\n",rd[fileInDirectory].firstBlockIndex);
-    //  printf("current offset: %ld\n", openFiles[openIndex].offset);
-    //  printf("current datablock for file: %d\n", currBlock);
+
+     //find the current offset in the file
      uint16_t currentOffset = openFiles[openIndex].offset % BLOCK_SIZE;
+
+     //read an entire block into the bounce buffer
       if(block_read(sb.dataBlockIndex+currBlock,&bounceBuffer)==-1){
-   //   printf("could not read\n");
       return -1;
     }
-   // printf("block to write/modify \n %s \n", bounceBuffer);
-    
-    uint16_t bytesLeftInBlock = BLOCK_SIZE-currentOffset;
-    uint16_t bytesToCopy = (bytesLeftInBlock < count - bytesWrite) ? bytesLeftInBlock : count - bytesWrite;
 
+    //determine how many bytes are left in the current block
+    uint16_t bytesLeftInBlock = BLOCK_SIZE-currentOffset;
+    //determine how many bytes to copy from the bouncebuffer
+    uint16_t bytesToCopy = (bytesLeftInBlock < count - bytesWrite) ? bytesLeftInBlock : count - bytesWrite;
+    bytesToCopy = (bytesToCopy< count) ? bytesToCopy: count;
+
+    //copy the contents from the buf (starting at how many bytes we've already written) into the bounce buffer(starting from the current offset)
     memcpy(bounceBuffer+currentOffset, buf+bytesWrite,bytesToCopy);
+    //update the amount of bytes youve written
     bytesWrite+=bytesToCopy;
 
-
+    //write to the datablock buffer
     if(block_write(currBlock+sb.dataBlockIndex, &bounceBuffer)==-1){
-   //   printf("could not write\n");
       return -1;
     }
+    //update the offset of the file
     openFiles[openIndex].offset+=bytesToCopy;
-    rd[fileInDirectory].fileSize+=bytesToCopy;
+    //the filesize is now at our new offset
+    rd[fileInDirectory].fileSize=openFiles[openIndex].offset;
 
+    //update how many bytes are left in the block
+    bytesLeftInBlock = BLOCK_SIZE - (openFiles[openIndex].offset % BLOCK_SIZE);
+
+    //if the current block we wrote to contains the end of the file AND we need to write in another block, find the next free FAT entry
      if(FATarray[FATBlock].entries[FATIndex]==FAT_EOC && count-bytesWrite>bytesLeftInBlock){
       int nextBlock = add_FAT_Entry(FATBlock,FATIndex);
+      //if we can't, the FAT array must be full
       if(nextBlock==-1){
         return bytesWrite;
       }
    }
   }
-  // printFAT();
-  // printOpenFiles();
-  // printRoot();
   return bytesWrite;
-
-  /* TODO: Phase 4 */
 }
 
 int fs_read(int fd, void *buf, size_t count) {
- // printf("read called\n");
-  // printFAT();
-  // printRoot();
-  // printOpenFiles();
-  
-  
-  //find file in open files
+  //input validation
   if (buf == NULL) {
     return -1;
   }
@@ -691,7 +666,6 @@ int fs_read(int fd, void *buf, size_t count) {
   for(openIndex=0;openIndex<FS_OPEN_MAX_COUNT;openIndex++){
     if(fd==openFiles[openIndex].fd){
       strcpy(fileName, openFiles[openIndex].fileName);
-     // printf("file: %s is in openfiles\n", openFiles[openIndex].fileName);
       found=1;
       break;
     }
@@ -699,7 +673,6 @@ int fs_read(int fd, void *buf, size_t count) {
   if(found==-1){
     return -1;
   }
- // printf("filename to copy: %s\n", fileName);
   //find file in root directory
   int fileInDirectory=0;
   int found2=-1;
@@ -717,69 +690,49 @@ int fs_read(int fd, void *buf, size_t count) {
   if(count==0){
     return 0;
   }
- // printf("first data block index for file: %d\n", rd[fileInDirectory].firstBlockIndex);
-  
+
+  //keeps track of the amount bytes read, as well as bytes left in the file to read
   size_t bytesRead=0;
   uint8_t bounceBuffer[BLOCK_SIZE];
+  uint16_t bytesLeftInFile = rd[fileInDirectory].fileSize - openFiles[openIndex].offset;
+
+  //keep boing until you read the correct amount(count)
   while(bytesRead<count){
+    //update bytes left in the file
+    bytesLeftInFile = rd[fileInDirectory].fileSize - openFiles[openIndex].offset;
+    //update the current data block you are on
    uint16_t currentDataBlockIndex = fs_block_index_from_current_offset(rd[fileInDirectory].firstBlockIndex, openFiles[openIndex].offset);
 
+   //calculate correcponding data block in the FAT
    uint16_t FATBlock = currentDataBlockIndex/2048;
    uint16_t FATIndex = currentDataBlockIndex%2048;
-  
-  // printf("current data block index %d\n",currentDataBlockIndex);
-    uint16_t currentOffset = openFiles[openIndex].offset % BLOCK_SIZE;
-   // printf("current offset %d\n",currentOffset);
+   
+   //find the current offset in the block
+   uint16_t currentOffset = openFiles[openIndex].offset % BLOCK_SIZE;
+
+   //read the entire block from the datablock to the bouncebuffer
     if(block_read(sb.dataBlockIndex+currentDataBlockIndex,&bounceBuffer)==-1){
-    //  printf("could not read\n");
       return -1;
     }
-   // printf("block read: \n %s \n", bounceBuffer);
-    
-    
+    //calculate bytes left in the block
     uint16_t bytesLeftInBlock = BLOCK_SIZE-currentOffset;
-    uint16_t bytesToCopy = (bytesLeftInBlock < count - bytesRead) ? bytesLeftInBlock : count - bytesRead;
-   
+    //determine how many bytes to copy
+    uint16_t bytesToCopy = (bytesLeftInBlock < bytesLeftInFile) ? bytesLeftInBlock : bytesLeftInFile;
+    bytesToCopy = (bytesToCopy < count) ? bytesToCopy: count;
+
+    //copy the contents of the bouncebuffer (starting from the current offset) to the buf
     memcpy(buf+bytesRead, bounceBuffer+currentOffset,bytesToCopy);
+
+    //update the amount of bytes read as well as the offset of the file
     bytesRead+=bytesToCopy;
     openFiles[openIndex].offset+=bytesToCopy;
 
-
-   // uint16_t nextDataBlockIndex = fs_block_index_from_current_offset(rd//[fileInDirectory].firstBlockIndex, openFiles[openIndex].offset);
-    // printf("nextDataBlockIndex: %d\n", nextDataBlockIndex);
-    // printf("next offset: %ld\n",openFiles[openIndex].offset);
-
-    if(FATarray[FATBlock].entries[FATIndex]==FAT_EOC){
+    //at this point, we would assume we read until the end of the file, so we can break
+    if(FATarray[FATBlock].entries[FATIndex]==FAT_EOC || bytesLeftInFile==0){
       break;
    }
-
   }
-
-
-  // while(bytesRead<count){
-  //   uint16_t currentDataBlockIndex = fs_block_index_from_current_offset(rd[fileInDirectory].firstBlockIndex, openFiles.Files[openIndex].offset);
-  //   uint16_t currentOffset = openFiles.Files[openIndex].offset % BLOCK_SIZE;
-  //   if(block_read(currentDataBlockIndex+sb.dataBlockIndex, &bounceBuffer)==-1){
-  //     return -1;
-  //   }
-  //   uint16_t bytesLeftInBlock = BLOCK_SIZE-currentOffset;
-  //   uint16_t bytesToCopy = (bytesLeftInBlock < count - bytesRead) ? bytesLeftInBlock : count - bytesRead;
-   
-  //   memcpy(buf+bytesRead, bounceBuffer+currentOffset,bytesToCopy);
-  //   bytesRead+=bytesLeftInBlock;
-  //   openFiles.Files[openIndex].offset+=bytesToCopy;
-  // }
   return bytesRead;
-
-  // uint16_t blockIndexBeforeRead = fs_block_index_from_current_offset(rd[fileInDirectory].firstBlockIndex, openFiles.Files[openIndex].offset);
-  // uint16_t blockIndexAftRead =fs_block_index_from_current_offset(blockIndexBeforeRead, count);
-  // uint8_t bounceBuffer[BLOCK_SIZE];
-  //if our read only takes 1 block
-
-
-
-
-
 
   /* TODO: Phase 4 */
 }
