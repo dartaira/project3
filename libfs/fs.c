@@ -580,7 +580,6 @@ int fs_write(int fd, void *buf, size_t count) {
   if (buf == NULL) {
     return -1;
   }
-
   //check if the file is open
   int found=-1;
   int openIndex =0;
@@ -666,9 +665,10 @@ int fs_write(int fd, void *buf, size_t count) {
     }
     //update the offset of the file
     openFiles[openIndex].offset+=bytesToCopy;
-    //the filesize is now at our new offset
-    rd[fileInDirectory].fileSize=openFiles[openIndex].offset;
-
+    //the filesize is now at our new offset if we've overwritten it
+    if(rd[fileInDirectory].fileSize<openFiles[openIndex].offset){
+       rd[fileInDirectory].fileSize=openFiles[openIndex].offset;
+    }
     //printf("new offset: %ld\n",  openFiles[openIndex].offset);
     
     
