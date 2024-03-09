@@ -116,9 +116,10 @@ void clearFAT(){
 
 void clearOpen(){
   for(int i=0;i<FS_OPEN_MAX_COUNT;i++){
-    openFiles[i].fd=-1;
-    openFiles[i].offset=0;
-    strcpy(openFiles[i].fileName, "\0");
+    if(openFiles[i].fileName[0]=='\0'){
+      openFiles[i].fd=-1;
+      openFiles[i].offset=0;
+    }
   }
 }
 
@@ -129,8 +130,6 @@ void clearRoot(){
     rd[i].firstBlockIndex=0;
   }
 }
-
-
 int fs_mount(const char *diskname) {
   if (block_disk_open(diskname) == -1) {
     return -1;
@@ -175,6 +174,12 @@ int fs_umount(void) {
   }
   if (block_disk_close() == -1) {
     return -1;
+  }
+  //check for open file descriptiors
+  for(int i=0;i<FS_OPEN_MAX_COUNT;i++){
+    if(openFiles[i].fileName[0]!='\0'){
+      return -1;
+    }
   }
   //free fat blocks
   //do NOT clear the FAT, rd, or openfiles. This is to ensure when we mount it again it has all the data 
