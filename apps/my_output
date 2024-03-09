@@ -1,8 +1,1 @@
-FS Info:
-total_blk_count=103
-fat_blk_count=1
-rdir_blk=2
-data_blk=3
-data_blk_count=100
-fat_free_ratio=99/100
-rdir_free_ratio=128/128
+Removed file 'file_fs'

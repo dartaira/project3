@@ -50,7 +50,8 @@ struct __attribute__((__packed__)) files {
 struct superblock sb;
 struct FAT *FATarray;
 struct rootDir rd[128];
-struct file openFiles[FS_FILE_MAX_COUNT];
+struct file openFiles[FS_OPEN_MAX_COUNT];
+int mountflag=0;
 
 void printFAT(){
   printf("printing FAT\n");
@@ -92,7 +93,9 @@ void printOpenFiles(){
       printf("file in openfiles %d: %s\n", i, openFiles[i].fileName);
        printf("fd in openfiles %d: %d\n", i, openFiles[i].fd);
        printf("offset in openfiles %d: %ld\n", i, openFiles[i].offset);
-      
+    }
+    else{
+      printf("this entry is open: %d and the fd should be -1: %d\n", i, openFiles[i].fd);
     }
   }
   printf("\n");
@@ -150,12 +153,10 @@ int fs_mount(const char *diskname) {
   if (block_read(sb.rootDirIndex, &rd) == -1) {
     return -1;
   }
-  //does it keep the open file fd when you unmount it and mount it again?
-  for(int openFileIterator=0;openFileIterator<FS_OPEN_MAX_COUNT;openFileIterator++){
-    openFiles[openFileIterator].fd=-1;
-    openFiles[openFileIterator].offset=0;
-    strcpy(openFiles[openFileIterator].fileName,"\0");
-  }
+  //at this point in the code, after you unmount ALL files should be closed
+  //this is to set the fd=-1 so that we can fill it later
+  clearOpen();
+  mountflag=1;
   return 0;
   /* TODO: Phase 1 */
 }
@@ -175,17 +176,17 @@ int fs_umount(void) {
   if (block_disk_close() == -1) {
     return -1;
   }
-  for(int openFileIterator=0;openFileIterator<FS_OPEN_MAX_COUNT;openFileIterator++){
-     openFiles[openFileIterator].fd=-1;
-    openFiles[openFileIterator].offset=0;
-    strcpy(openFiles[openFileIterator].fileName,"\0");
-    close(openFiles[openFileIterator].fd);
-  }
+  //free fat blocks
+  //do NOT clear the FAT, rd, or openfiles. This is to ensure when we mount it again it has all the data 
+  mountflag=0;
   return 0;
   /* TODO: Phase 1 */
 }
 
 int fs_info(void) {
+  if(mountflag==0){
+    return -1;
+  }
   // Printing info into terminal
   printf("FS Info:\n");
   printf("total_blk_count=%d\n", sb.numTotalBlocks);
@@ -235,6 +236,9 @@ int fs_info(void) {
 }
 
 int fs_create(const char *filename) {
+  if(mountflag==0){
+    return -1;
+  }
   //check invalid file
   if (filename == NULL || strlen(filename) >= FS_FILENAME_LEN) {
     return -1;
@@ -274,6 +278,9 @@ int fs_create(const char *filename) {
 }
 
 int fs_delete(const char *filename) {
+  if(mountflag==0){
+    return -1;
+  }
   // Look for file in the root directory 
   int fileIndex = -1;
   for (int i = 0; i < FS_FILE_MAX_COUNT; i++) {
@@ -317,6 +324,9 @@ int fs_delete(const char *filename) {
 }
 
 int fs_ls(void) {
+  if(mountflag==0){
+    return -1;
+  }
   printf("FS Ls:\n");
   //iterate through all the files in the root directory
   for (int currentFile = 0; currentFile < Root_Dir_Entries; currentFile++) {
@@ -332,6 +342,9 @@ int fs_ls(void) {
 }
 
 int fs_open(const char *filename) {  
+  if(mountflag==0){
+    return -1;
+  }
   // First check if the file is mounted
 
   // Check if the file is NULL or invalid
@@ -385,6 +398,9 @@ int fs_open(const char *filename) {
 }
 
 int fs_close(int fd) {
+  if(mountflag==0){
+    return -1;
+  }
   int fdFind = 0;
   int found = -1;
   //checks if the file is opened
@@ -408,6 +424,9 @@ int fs_close(int fd) {
 }
 
 int fs_stat(int fd) {
+  if(mountflag==0){
+    return -1;
+  }
   char nameOfFile[FS_FILENAME_LEN];
   int openIndex = 0;
   int found = 0;
@@ -433,6 +452,9 @@ int fs_stat(int fd) {
 }
 
 int fs_lseek(int fd, size_t offset) {
+  if(mountflag==0){
+    return -1;
+  }
   int openIndex = 0;
   int found = 0;
   //check if file is opened and get the filesize
@@ -461,6 +483,7 @@ int fs_lseek(int fd, size_t offset) {
 }
 
 //from the firstblock index, (the same as the entry point to the fat chain)
+//fix
 uint16_t fs_block_index_from_current_offset(uint16_t startBlock, size_t currFileOffset){
 
   //calculate how many entries to traverse the fat array from the starting block
@@ -492,7 +515,7 @@ int add_FAT_Entry(uint16_t FATBlock, uint16_t FATEntry){
       //checks if the entry is free
       if(FATarray[i].entries[j]==0){
         //fill the current entry with the "free" entry
-        FATarray[FATBlock].entries[FATEntry]= FATarray[i].entries[j];
+        FATarray[FATBlock].entries[FATEntry]= (i*2048 + j);
         FATarray[i].entries[j]=FAT_EOC;
         return 1;
       }
@@ -507,7 +530,7 @@ int add_FAT_Entry(uint16_t FATBlock, uint16_t FATEntry){
      //checks if the entry is free
     if(FATarray[fullFatBlocks].entries[extra]==0){
        //fill the current entry with the "free" entry
-       FATarray[FATBlock].entries[FATEntry]= FATarray[fullFatBlocks].entries[extra];
+       FATarray[FATBlock].entries[FATEntry]= (fullFatBlocks*2048 + extra);
        FATarray[fullFatBlocks].entries[extra]=FAT_EOC;
       return 1;
     }
@@ -548,6 +571,9 @@ uint16_t find_empty_FAT(){
 }
 
 int fs_write(int fd, void *buf, size_t count) {
+  if(mountflag==0){
+    return -1;
+  }
    if(count==0){
     return 0;
   }
@@ -583,7 +609,7 @@ int fs_write(int fd, void *buf, size_t count) {
   if(found2==-1){
     return -1;
   }
-  //if we are writing to an initiall empty file, occupy the firstBlockIndex to write the data
+  //if we are writing to an initially empty file, occupy the firstBlockIndex to write the data
     if(rd[fileInDirectory].firstBlockIndex == FAT_EOC){
       rd[fileInDirectory].firstBlockIndex = find_empty_FAT();
       if(rd[fileInDirectory].firstBlockIndex==0){
@@ -594,7 +620,6 @@ int fs_write(int fd, void *buf, size_t count) {
      FATarray[FATBlock2].entries[FATIndex2]=FAT_EOC;
     }
 
-
   //bounce buffer and how many bytes we have currently written
   size_t bytesWrite=0;
   uint8_t bounceBuffer[BLOCK_SIZE];
@@ -603,13 +628,17 @@ int fs_write(int fd, void *buf, size_t count) {
   while(bytesWrite<count){
     //find current data block you are on
      uint16_t currBlock=fs_block_index_from_current_offset(rd[fileInDirectory].firstBlockIndex, openFiles[openIndex].offset);
+    // printf("current data block: %d\n", currBlock);
 
      //find the corresponding entry in the FATarray
      uint16_t FATBlock = currBlock/2048;
      uint16_t FATIndex = currBlock%2048;
+    //  printf("current fat block: %d\n", FATBlock);
+    //  printf("current index block: %d\n", FATIndex);
 
      //find the current offset in the file
      uint16_t currentOffset = openFiles[openIndex].offset % BLOCK_SIZE;
+      //printf("current offset: %d\n", currentOffset);
 
      //read an entire block into the bounce buffer
       if(block_read(sb.dataBlockIndex+currBlock,&bounceBuffer)==-1){
@@ -622,8 +651,12 @@ int fs_write(int fd, void *buf, size_t count) {
     uint16_t bytesToCopy = (bytesLeftInBlock < count - bytesWrite) ? bytesLeftInBlock : count - bytesWrite;
     bytesToCopy = (bytesToCopy< count) ? bytesToCopy: count;
 
+    // printf("bytes left in block: %d\n", bytesLeftInBlock);
+    // printf("bytes to copy: %d\n", bytesToCopy);
+
     //copy the contents from the buf (starting at how many bytes we've already written) into the bounce buffer(starting from the current offset)
     memcpy(bounceBuffer+currentOffset, buf+bytesWrite,bytesToCopy);
+
     //update the amount of bytes youve written
     bytesWrite+=bytesToCopy;
 
@@ -636,13 +669,19 @@ int fs_write(int fd, void *buf, size_t count) {
     //the filesize is now at our new offset
     rd[fileInDirectory].fileSize=openFiles[openIndex].offset;
 
+    //printf("new offset: %ld\n",  openFiles[openIndex].offset);
+    
+    
     //update how many bytes are left in the block
-    bytesLeftInBlock = BLOCK_SIZE - (openFiles[openIndex].offset % BLOCK_SIZE);
-
+    //fix
+    // bytesLeftInBlock = BLOCK_SIZE-(openFiles[openIndex].offset % BLOCK_SIZE);
+    // printf("bytes left in block: %d\n", bytesLeftInBlock);
+    
     //if the current block we wrote to contains the end of the file AND we need to write in another block, find the next free FAT entry
-     if(FATarray[FATBlock].entries[FATIndex]==FAT_EOC && count-bytesWrite>bytesLeftInBlock){
+     if(FATarray[FATBlock].entries[FATIndex]==FAT_EOC && count-bytesWrite>0){
       int nextBlock = add_FAT_Entry(FATBlock,FATIndex);
-      //if we can't, the FAT array must be full
+      // printf("add new fat entry\n");
+      // printf("next data block to go to: %d\n",FATarray[FATBlock].entries[FATIndex]);
       if(nextBlock==-1){
         return bytesWrite;
       }
@@ -652,6 +691,9 @@ int fs_write(int fd, void *buf, size_t count) {
 }
 
 int fs_read(int fd, void *buf, size_t count) {
+  if(mountflag==0){
+    return -1;
+  }
   //input validation
   if (buf == NULL) {
     return -1;

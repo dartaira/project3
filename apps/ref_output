@@ -1,8 +1,8 @@
 FS Info:
-total_blk_count=103
-fat_blk_count=1
-rdir_blk=2
-data_blk=3
-data_blk_count=100
-fat_free_ratio=99/100
-rdir_free_ratio=128/128
+total_blk_count=8098
+fat_blk_count=4
+rdir_blk=5
+data_blk=6
+data_blk_count=8092
+fat_free_ratio=8081/8092
+rdir_free_ratio=126/128
